@@ -19,7 +19,17 @@ PAGES = [
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Referer": "https://www.google.com/",
 }
 
 # Matches: "SAVE $85.00 | 52% off Price reduced to $79.99 from $164.99"
@@ -33,9 +43,13 @@ SITEWIDE_PROMO_PATTERN = re.compile(r"Extra\s+\d+%\s+off\s+[A-Za-z0-9 ]+", re.IG
 PLAIN_PRICE_PATTERN = re.compile(r"\$([\d.,]+)")
 
 
+_session = requests.Session()
+_session.headers.update(HEADERS)
+
+
 def fetch_page(url):
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp = _session.get(url, timeout=20)
         resp.raise_for_status()
         return resp.text
     except Exception as e:
@@ -108,13 +122,11 @@ def parse_listings_fallback(soup, page_url):
     """
     results = []
     full_text = soup.get_text(separator="\n", strip=True)
-    # Look for lines with the SAVE pattern and grab the nearest preceding line as name.
     lines = full_text.split("\n")
     for i, line in enumerate(lines):
         match = SAVE_PATTERN.search(line)
         if match:
             discount_pct, sale_price, orig_price = match.groups()
-            # walk backwards a few lines to find something that looks like a product name
             name = None
             for j in range(i - 1, max(i - 5, -1), -1):
                 candidate = lines[j].strip()
@@ -140,7 +152,6 @@ def find_sitewide_promos(html):
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(separator=" ", strip=True)
     matches = SITEWIDE_PROMO_PATTERN.findall(text)
-    # Dedup while preserving order
     seen = set()
     unique = []
     for m in matches:
@@ -165,8 +176,6 @@ def scrape():
               f"{len(promos)} sitewide promos detected")
         all_results.extend(listings)
 
-    # Attach the sitewide promo context to every listing from this retailer so the
-    # curation step knows an extra stacking discount may apply at checkout.
     if all_promos:
         promo_note = " | ".join(sorted(all_promos))
         for item in all_results:
@@ -176,7 +185,6 @@ def scrape():
 
 
 if __name__ == "__main__":
-    # Quick manual test: run `python scrapers/joes_nb.py` to see raw output
     import json
     data = scrape()
     print(json.dumps(data, indent=2))
