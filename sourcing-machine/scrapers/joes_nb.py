@@ -6,7 +6,7 @@ approach works without needing a headless browser.
 Returns a list of dicts: {retailer, brand, model, price, originalPrice, discountPercent, url}
 """
 import re
-import requests
+from curl_cffi import requests as curl_requests
 from bs4 import BeautifulSoup
 
 RETAILER_NAME = "Joe's New Balance Outlet"
@@ -37,20 +37,20 @@ SAVE_PATTERN = re.compile(
     r"SAVE\s*\$[\d.,]+\s*\|\s*(\d+)%\s*off\s*Price reduced to\s*\$([\d.,]+)\s*from\s*\$([\d.,]+)",
     re.IGNORECASE
 )
-# Matches: "Extra 30% off ABZORB 2000", "Extra 40% off select footwear", etc.
 SITEWIDE_PROMO_PATTERN = re.compile(r"Extra\s+\d+%\s+off\s+[A-Za-z0-9 ]+", re.IGNORECASE)
-# Matches plain price with no discount shown, e.g. "$89.99"
 PLAIN_PRICE_PATTERN = re.compile(r"\$([\d.,]+)")
 
 
-_session = requests.Session()
+_session = curl_requests.Session(impersonate="chrome124")
 _session.headers.update(HEADERS)
 
 
 def fetch_page(url):
     try:
         resp = _session.get(url, timeout=20)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            print(f"[joes_nb] Failed to fetch {url}: HTTP {resp.status_code}")
+            return None
         return resp.text
     except Exception as e:
         print(f"[joes_nb] Failed to fetch {url}: {e}")
@@ -58,16 +58,8 @@ def fetch_page(url):
 
 
 def parse_listings(html, page_url):
-    """
-    Parses product tiles. Selectors below are a best-effort based on common
-    Salesforce Commerce Cloud storefront markup (product-tile / pdp-link classes).
-    If the site's markup differs, this may return zero results — check the
-    debug output and we'll adjust the selectors together.
-    """
     soup = BeautifulSoup(html, "html.parser")
     results = []
-
-    # Try the common SFCC product tile container first.
     tiles = soup.select("div.product-tile, div[class*='product-tile']")
 
     if not tiles:
@@ -97,7 +89,6 @@ def parse_listings(html, page_url):
                 "url": link or page_url,
             })
         else:
-            # No explicit markdown shown — grab first plain price as a fallback signal.
             price_match = PLAIN_PRICE_PATTERN.search(tile_text)
             if name and price_match:
                 results.append({
@@ -114,12 +105,6 @@ def parse_listings(html, page_url):
 
 
 def parse_listings_fallback(soup, page_url):
-    """
-    Fallback: scan raw page text for the "ModelName ... SAVE $X | Y% off ..." pattern
-    directly, without relying on tile container classes. Less precise (may miss the
-    exact model name association) but still surfaces discount data if the primary
-    selector breaks.
-    """
     results = []
     full_text = soup.get_text(separator="\n", strip=True)
     lines = full_text.split("\n")
@@ -146,9 +131,6 @@ def parse_listings_fallback(soup, page_url):
 
 
 def find_sitewide_promos(html):
-    """Detects sitewide/stacking promo banners like 'Extra 40% off select footwear' —
-    these stack on top of individual item markdowns, which matters for your actual
-    out-the-door price."""
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(separator=" ", strip=True)
     matches = SITEWIDE_PROMO_PATTERN.findall(text)
